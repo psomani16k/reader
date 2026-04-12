@@ -1,0 +1,12 @@
+services:
+  reader:
+    image: ghcr.io/psomani16k/reader
+    container_name: reader 
+    restart: unless-stopped
+    ports:
+      - "5001:6969"
+    volumes:
+      - /home/parth/epubs:/epubs
+      - /home/parth/html:/html
+    # Optional: set user permissions to match your local user
+    user: "1000:1000"
