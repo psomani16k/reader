@@ -5,15 +5,14 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use epub::doc::EpubDoc;
-use serde::Serialize;
 use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
 use crate::extractor::read_position::{ReadPosition, ReadPositionFileData};
 use crate::extractor::util::DirHelper;
 
-pub const EPUBS_DIR: &str = "./epubs";
-pub const HTML_DIR: &str = "./html";
+pub const EPUBS_DIR: &str = "/epubs";
+pub const HTML_DIR: &str = "/html";
 const POLL_INTERVAL_SECS: u64 = 60;
 
 pub async fn run_extractor() -> anyhow::Result<()> {
