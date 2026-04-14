@@ -439,7 +439,3 @@ fn generate_index(book_name: &str, sections: &[(String, String)]) -> String {
     });
     serde_json::to_string_pretty(&index).unwrap()
 }
-
-fn prettify_section_content(content: &str) -> anyhow::Result<String> {
-    return anyhow::Ok(content.to_string());
-}
