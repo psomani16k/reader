@@ -5,9 +5,11 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use epub::doc::EpubDoc;
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
+use crate::extractor::read_position::{ReadPosition, ReadPositionFileData};
 use crate::extractor::util::DirHelper;
 
 pub const EPUBS_DIR: &str = "./epubs";
@@ -125,7 +127,9 @@ fn clean_output_dir(out_dir: &Path) {
         }
         if path.is_dir() {
             let _ = fs::remove_dir_all(&path);
-        } else if name == "index.json" || name == "index.html" || (name.starts_with("section_") && name.ends_with(".html"))
+        } else if name == "index.json"
+            || name == "index.html"
+            || (name.starts_with("section_") && name.ends_with(".html"))
         {
             let _ = fs::remove_file(&path);
         }
@@ -165,6 +169,8 @@ fn convert_epub(epub_path: &Path, out_dir: &Path) -> anyhow::Result<()> {
     let spine = doc.spine.clone();
     let resources = doc.resources.clone();
 
+    let mut info = ReadPositionFileData::default();
+
     for (i, spine_item) in spine.iter().enumerate() {
         let id = &spine_item.idref;
         let Some(resource) = resources.get(id) else {
@@ -187,11 +193,21 @@ fn convert_epub(epub_path: &Path, out_dir: &Path) -> anyhow::Result<()> {
         // Rewrite resource paths (img src, link href) so they resolve
         // correctly from the flat section file at the book root.
         let content = rewrite_resource_paths(&content, &resource.path, &root_base);
-        // let content = prettify_section_content(&content)?;
-        let filename = format!("section_{:03}.html", i + 1);
+        let content = inject_scroll_script(&content);
+        let filename = format!("section_{:03}", i + 1);
+        info.read_position.insert(
+            filename.clone(),
+            ReadPosition::new_default(filename.clone()),
+        );
+        let filename = format!("{}.html", filename);
         fs::write(out_dir.join(&filename), &content)?;
         sections.push((title, filename));
     }
+
+    fs::write(
+        out_dir.join(".info.json"),
+        serde_json::to_string_pretty(&info)?,
+    )?;
 
     if toc_hits == 0 && !sections.is_empty() {
         eprintln!(
@@ -248,6 +264,89 @@ fn extract_resources(
         fs::write(&dest, bytes)?;
     }
     Ok(())
+}
+
+/// Inject the scroll-position tracking script before </body>.
+/// Uses rfind on a lowercased copy for byte-safe, case-insensitive matching.
+/// Falls back to appending if </body> is absent (some EPUB sections are fragments).
+fn inject_scroll_script(html: &str) -> String {
+    const SCRIPT: &str = r#"<script>
+(function() {
+  function getNodePath(el) {
+    var path = [];
+    var node = el;
+    while (node && node !== document.body) {
+      var parent = node.parentElement;
+      if (!parent) break;
+      path.unshift(Array.prototype.indexOf.call(parent.children, node));
+      node = parent;
+    }
+    return path;
+  }
+
+  function findTopmostVisible() {
+    var x = Math.max(1, Math.floor(window.innerWidth / 2));
+    var el = document.elementFromPoint(x, 1);
+    return el || document.body;
+  }
+
+  function resolveNodePath(nodePath) {
+    var el = document.body;
+    for (var i = 0; i < nodePath.length; i++) {
+      if (!el.children || nodePath[i] >= el.children.length) return null;
+      el = el.children[nodePath[i]];
+    }
+    return el;
+  }
+
+  var debounceTimer = null;
+  window.addEventListener('scroll', function() {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(function() {
+      var el = findTopmostVisible();
+      var rect = el.getBoundingClientRect();
+      fetch('/api/updateReadPosition', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          path: window.location.pathname,
+          node_path: getNodePath(el),
+          offset: Math.max(0, -Math.round(rect.top))
+        })
+      }).catch(function() {});
+    }, 500);
+  }, { passive: true });
+
+  window.addEventListener('load', function() {
+    fetch('/api/readPosition?path=' + encodeURIComponent(window.location.pathname))
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (!data.node_path || !data.node_path.length) return;
+        var el = resolveNodePath(data.node_path);
+        if (!el) return;
+        el.scrollIntoView({ block: 'start' });
+        if (data.offset > 0) window.scrollBy(0, data.offset);
+      })
+      .catch(function() {});
+  });
+})();
+</script>"#;
+
+    let lower = html.to_ascii_lowercase();
+    if let Some(pos) = lower.rfind("</body>") {
+        let mut result = String::with_capacity(html.len() + SCRIPT.len() + 2);
+        result.push_str(&html[..pos]);
+        result.push('\n');
+        result.push_str(SCRIPT);
+        result.push('\n');
+        result.push_str(&html[pos..]);
+        result
+    } else {
+        let mut result = html.to_string();
+        result.push('\n');
+        result.push_str(SCRIPT);
+        result
+    }
 }
 
 /// Rewrite src="..." and href="..." attributes in section HTML so that

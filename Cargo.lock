@@ -1088,12 +1088,13 @@ dependencies = [
 
 [[package]]
 name = "reader"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
  "epub",
  "hex",
+ "percent-encoding",
  "scraper",
  "serde",
  "serde_json",
