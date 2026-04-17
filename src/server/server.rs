@@ -2,7 +2,7 @@ use axum::{
     Router,
     extract::{Path, Query},
     http::StatusCode,
-    response::{Html, IntoResponse, Response},
+    response::{Html, IntoResponse, Redirect, Response},
     routing::get,
 };
 use std::collections::HashMap;
@@ -11,21 +11,33 @@ use tokio::fs;
 
 use crate::server::api_server;
 use crate::server::templates::{self, BookIndex, Breadcrumb, EntryInfo};
-use crate::extractor::extractor::HTML_DIR;
+use crate::{extractor::extractor::HTML_DIR, server::previous_path::PreviousPage};
 
 pub fn router() -> Router {
     Router::new()
         .nest("/api", api_server::router())
         .route("/static/{*path}", get(serve_static))
+        .route("/previous", get(serve_previous))
         .route("/", get(serve_path_root))
         .route("/{*path}", get(serve_path))
+}
+
+async fn serve_previous() -> Redirect {
+    match PreviousPage::get().await {
+        Some(previous) => Redirect::to(&previous),
+        None => Redirect::to("/"),
+    }
 }
 
 async fn serve_static(Path(path): Path<String>) -> Response {
     match path.as_str() {
         "common.css" => {
             let css = include_str!("assets/common.css");
-            ([(axum::http::header::CONTENT_TYPE, "text/css; charset=utf-8")], css).into_response()
+            (
+                [(axum::http::header::CONTENT_TYPE, "text/css; charset=utf-8")],
+                css,
+            )
+                .into_response()
         }
         _ => StatusCode::NOT_FOUND.into_response(),
     }
@@ -66,6 +78,8 @@ async fn serve_path_impl(rel_path: &str, raw: bool) -> Response {
             // render the section view wrapper instead of serving the raw file
             if !raw {
                 if let Some(resp) = try_render_section_view(rel_path, &full_path).await {
+                    // it's okay if we weren't able to store the latest path, TODO: log this
+                    let _p = PreviousPage::set(&rel_path).await;
                     return resp;
                 }
             }
@@ -126,7 +140,9 @@ async fn try_render_section_view(rel_path: &str, full_path: &std::path::Path) ->
     };
 
     // Build breadcrumbs from the parent path (the book directory)
-    let parent_rel = std::path::Path::new(rel_path).parent().unwrap_or(std::path::Path::new(""));
+    let parent_rel = std::path::Path::new(rel_path)
+        .parent()
+        .unwrap_or(std::path::Path::new(""));
     let breadcrumbs = build_breadcrumbs(parent_rel.to_str().unwrap_or(""));
 
     let iframe_src = format!("{file_name}?raw=true");
@@ -146,7 +162,11 @@ async fn try_render_section_view(rel_path: &str, full_path: &std::path::Path) ->
     }
 }
 
-async fn render_directory(mut entries: fs::ReadDir, rel_path: &str, full_path: &std::path::Path) -> Response {
+async fn render_directory(
+    mut entries: fs::ReadDir,
+    rel_path: &str,
+    full_path: &std::path::Path,
+) -> Response {
     let mut items: Vec<(String, bool)> = Vec::new();
 
     while let Ok(Some(entry)) = entries.next_entry().await {
@@ -158,7 +178,9 @@ async fn render_directory(mut entries: fs::ReadDir, rel_path: &str, full_path: &
         if name.starts_with('.') {
             continue;
         }
-        let Ok(meta) = entry.metadata().await else { continue };
+        let Ok(meta) = entry.metadata().await else {
+            continue;
+        };
         let is_dir = meta.is_dir();
         items.push((name, is_dir));
     }
@@ -193,7 +215,12 @@ async fn render_directory(mut entries: fs::ReadDir, rel_path: &str, full_path: &
             } else {
                 name.clone()
             };
-            EntryInfo { url, is_dir, is_book, name }
+            EntryInfo {
+                url,
+                is_dir,
+                is_book,
+                name,
+            }
         })
         .collect();
 
@@ -207,7 +234,10 @@ async fn render_directory(mut entries: fs::ReadDir, rel_path: &str, full_path: &
 }
 
 fn build_breadcrumbs(rel_path: &str) -> Vec<Breadcrumb> {
-    let mut breadcrumbs = vec![Breadcrumb { url: "/".to_string(), name: "root".to_string() }];
+    let mut breadcrumbs = vec![Breadcrumb {
+        url: "/".to_string(),
+        name: "root".to_string(),
+    }];
     if !rel_path.is_empty() {
         let mut accumulated = String::new();
         for segment in rel_path.split('/') {

@@ -33,7 +33,20 @@
       padding: 0.5rem 1rem;
       display: flex;
       flex-direction: column;
+    }
+
+    .extra-options {
+      overflow: hidden;
+      max-height: 0;
+      transition: max-height 0.2s ease;
+      display: flex;
+      flex-direction: column;
       gap: 0.4rem;
+    }
+
+    .extra-options.open {
+      max-height: 6rem;
+      padding-bottom: 0.5rem;
     }
 
     .nav-row {
@@ -59,6 +72,26 @@
       accent-color: #0066cc;
     }
 
+    .zoom-row {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      font-size: 0.8rem;
+    }
+
+    .zoom-row .zoom-label { white-space: nowrap; }
+
+    .zoom-row .zoom-value {
+      min-width: 3.5rem;
+      text-align: center;
+    }
+
+    .btn-compact {
+      padding: 0.3rem 0.65rem;
+      font-size: 1rem;
+      line-height: 1;
+    }
+
     @media (prefers-color-scheme: dark) {
       .slider-row input[type="range"] { accent-color: #6ab0ff; }
     }
@@ -71,38 +104,56 @@
     </div>
 
     <div class="entry-list bottom-bar">
+      <div class="extra-options" id="extra-options">
+        <div class="slider-row">
+          <label for="padding-slider">Padding</label>
+          <input type="range" id="padding-slider" min="0" max="30" value="0" step="1">
+          <span id="padding-value">0%</span>
+        </div>
+        <div class="zoom-row">
+          <span class="zoom-label">Zoom</span>
+          <button class="upload-btn btn-compact" id="zoom-out">&#8722;</button>
+          <span class="zoom-value" id="zoom-value">100%</span>
+          <button class="upload-btn btn-compact" id="zoom-in">+</button>
+        </div>
+      </div>
+
       <div class="nav-row">
         {%- if prev_url %}
-        <a class="upload-btn" href="{{ prev_url }}">← Previous</a>
+        <a class="upload-btn" href="{{ prev_url }}">&#8592; Previous</a>
         {%- else %}
         <span class="nav-spacer"></span>
         {%- endif %}
+
+        <span class="nav-spacer"></span>
+
+        <button class="upload-btn btn-compact" id="more-btn" aria-label="More options">&#8943;</button>
 
         <span class="nav-spacer"></span>
 
         {%- if next_url %}
-        <a class="upload-btn" href="{{ next_url }}">Next →</a>
+        <a class="upload-btn" href="{{ next_url }}">Next &#8594;</a>
         {%- else %}
         <span class="nav-spacer"></span>
         {%- endif %}
-      </div>
-
-      <div class="slider-row">
-        <label for="padding-slider">Padding</label>
-        <input type="range" id="padding-slider" min="0" max="30" value="0" step="1">
-        <span id="padding-value">0%</span>
       </div>
     </div>
   </div>
 
   <script>
     const slider = document.getElementById('padding-slider');
-    const label = document.getElementById('padding-value');
+    const paddingLabel = document.getElementById('padding-value');
     const iframe = document.getElementById('content-frame');
+    const moreBtn = document.getElementById('more-btn');
+    const extraOptions = document.getElementById('extra-options');
+    const zoomInBtn = document.getElementById('zoom-in');
+    const zoomOutBtn = document.getElementById('zoom-out');
+    const zoomLabel = document.getElementById('zoom-value');
 
+    // --- Padding ---
     function applyPadding(pct) {
       iframe.style.width = (100 - 2 * pct) + '%';
-      label.textContent = pct + '%';
+      paddingLabel.textContent = pct + '%';
     }
 
     slider.addEventListener('input', function() {
@@ -121,6 +172,46 @@
         }
       }
     } catch(e) {}
+
+    // --- More options toggle ---
+    moreBtn.addEventListener('click', function() {
+      extraOptions.classList.toggle('open');
+    });
+
+    // --- Zoom ---
+    let zoom = 100;
+
+    function applyZoomToIframe() {
+      try {
+        const doc = iframe.contentDocument || iframe.contentWindow.document;
+        if (doc && doc.documentElement) {
+          doc.documentElement.style.zoom = zoom / 100;
+        }
+      } catch(e) {}
+    }
+
+    function setZoom(z) {
+      zoom = Math.max(50, Math.min(200, z));
+      zoomLabel.textContent = zoom + '%';
+      applyZoomToIframe();
+      try { localStorage.setItem('reader-zoom', zoom); } catch(e) {}
+    }
+
+    iframe.addEventListener('load', applyZoomToIframe);
+
+    try {
+      const saved = localStorage.getItem('reader-zoom');
+      if (saved !== null) {
+        const v = parseInt(saved, 10);
+        if (v >= 50 && v <= 200) {
+          zoom = v;
+          zoomLabel.textContent = zoom + '%';
+        }
+      }
+    } catch(e) {}
+
+    zoomInBtn.addEventListener('click', () => setZoom(zoom + 10));
+    zoomOutBtn.addEventListener('click', () => setZoom(zoom - 10));
   </script>
 </body>
 </html>

@@ -1,4 +1,4 @@
-use crate::extractor::extractor::run_extractor;
+use crate::extractor::extractor::{run_extractor, DATA_DIR};
 
 mod extractor;
 mod server;
@@ -6,6 +6,7 @@ mod util;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    tokio::fs::create_dir_all(DATA_DIR).await?;
     let extractor = tokio::spawn(run_extractor());
     let server = tokio::spawn(run_server());
     tokio::select! {

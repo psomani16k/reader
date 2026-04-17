@@ -1,34 +1,35 @@
 use std::collections::{HashMap, HashSet};
-use std::fs;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use epub::doc::EpubDoc;
 use sha2::{Digest, Sha256};
+use tokio::fs;
+use tokio::io::AsyncReadExt;
 use walkdir::WalkDir;
 
 use crate::extractor::read_position::{ReadPosition, ReadPositionFileData};
 use crate::extractor::util::DirHelper;
 
-pub const EPUBS_DIR: &str = "/epubs";
-pub const HTML_DIR: &str = "/html";
+pub const EPUBS_DIR: &str = "./epubs";
+pub const HTML_DIR: &str = "./html";
+pub const DATA_DIR: &str = "./data";
 const POLL_INTERVAL_SECS: u64 = 60;
 
 pub async fn run_extractor() -> anyhow::Result<()> {
     loop {
-        if let Err(e) = extract_all() {
+        if let Err(e) = extract_all().await {
             eprintln!("Extractor error: {e}");
         }
         tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_SECS)).await;
     }
 }
 
-fn extract_all() -> anyhow::Result<()> {
+async fn extract_all() -> anyhow::Result<()> {
     let epubs_root = Path::new(EPUBS_DIR);
     let html_root = Path::new(HTML_DIR);
-    fs::create_dir_all(html_root)?;
-    fs::create_dir_all(epubs_root)?;
+    fs::create_dir_all(html_root).await?;
+    fs::create_dir_all(epubs_root).await?;
     let mut epub_paths: HashSet<DirHelper> = HashSet::new();
     for entry in WalkDir::new(epubs_root) {
         let entry = entry?;
@@ -52,67 +53,46 @@ fn extract_all() -> anyhow::Result<()> {
         }
     }
 
-    epub_paths.iter().for_each(|epub_file| {
-        match maybe_convert(&epub_file.epub_file_path(), &epub_file.html_dir()) {
+    for epub_file in epub_paths.iter() {
+        match maybe_convert(&epub_file.epub_file_path(), &epub_file.html_dir()).await {
             Ok(_) => {}
             Err(e) => {
                 eprintln!("ERROR CONVERTING EPUB: {}", e.to_string());
             }
         }
-    });
+    }
 
     for html_path in html_paths.iter() {
         if !epub_paths.contains(&html_path) {
-            fs::remove_dir_all(&html_path.html_dir())?;
+            fs::remove_dir_all(&html_path.html_dir()).await?;
         }
     }
 
     return anyhow::Ok(());
 }
 
-// fn walk_and_extract(dir: &Path, epubs_root: &Path, html_root: &Path) -> anyhow::Result<()> {
-//     for entry in fs::read_dir(dir)? {
-//         let entry = entry?;
-//         let path = entry.path();
-//         if path.is_dir() {
-//             walk_and_extract(&path, epubs_root, html_root)?;
-//         } else if path.extension().map_or(false, |e| e == "epub") {
-//             let relative = path.strip_prefix(epubs_root)?;
-//             let stem = path.file_stem().unwrap();
-//             let out_dir = html_root
-//                 .join(relative.parent().unwrap_or(Path::new("")))
-//                 .join(stem);
-//
-//             if let Err(e) = maybe_convert(&path, &out_dir) {
-//                 eprintln!("Failed to process {}: {e}", path.display());
-//             }
-//         }
-//     }
-//     Ok(())
-// }
-
-fn maybe_convert(epub_path: &Path, out_dir: &Path) -> anyhow::Result<()> {
-    let hash = hash_file(epub_path)?;
+async fn maybe_convert(epub_path: &Path, out_dir: &Path) -> anyhow::Result<()> {
+    let hash = hash_file(epub_path).await?;
     let hash_path = out_dir.join(".hash");
 
     if hash_path.exists() {
-        let stored = fs::read_to_string(&hash_path)?;
+        let stored = fs::read_to_string(&hash_path).await?;
         if stored.trim() == hash {
             return Ok(());
         }
     }
 
-    fs::create_dir_all(out_dir)?;
-    clean_output_dir(out_dir);
-    convert_epub(epub_path, out_dir)?;
-    fs::write(hash_path, &hash)?;
+    fs::create_dir_all(out_dir).await?;
+    clean_output_dir(out_dir).await;
+    convert_epub(epub_path, out_dir).await?;
+    fs::write(hash_path, &hash).await?;
     Ok(())
 }
 
 /// Remove old section_*.html, index.html, and resource subdirectories before
 /// re-conversion so stale files from a prior version don't linger.
-fn clean_output_dir(out_dir: &Path) {
-    let Ok(entries) = fs::read_dir(out_dir) else {
+async fn clean_output_dir(out_dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(out_dir) else {
         return;
     };
     for entry in entries.flatten() {
@@ -135,12 +115,12 @@ fn clean_output_dir(out_dir: &Path) {
     }
 }
 
-fn hash_file(path: &Path) -> anyhow::Result<String> {
-    let mut file = fs::File::open(path)?;
+async fn hash_file(path: &Path) -> anyhow::Result<String> {
+    let mut file = fs::File::open(path).await?;
     let mut hasher = Sha256::new();
     let mut buf = [0u8; 8192];
     loop {
-        let n = file.read(&mut buf)?;
+        let n = file.read(&mut buf).await?;
         if n == 0 {
             break;
         }
@@ -149,7 +129,7 @@ fn hash_file(path: &Path) -> anyhow::Result<String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
-fn convert_epub(epub_path: &Path, out_dir: &Path) -> anyhow::Result<()> {
+async fn convert_epub(epub_path: &Path, out_dir: &Path) -> anyhow::Result<()> {
     let mut doc =
         EpubDoc::new(epub_path).map_err(|e| anyhow::anyhow!("Failed to open epub: {e}"))?;
     let root_base = doc.root_base.clone();
@@ -199,14 +179,15 @@ fn convert_epub(epub_path: &Path, out_dir: &Path) -> anyhow::Result<()> {
             ReadPosition::new_default(filename.clone()),
         );
         let filename = format!("{}.html", filename);
-        fs::write(out_dir.join(&filename), &content)?;
+        fs::write(out_dir.join(&filename), &content).await?;
         sections.push((title, filename));
     }
 
     fs::write(
         out_dir.join(".info.json"),
         serde_json::to_string_pretty(&info)?,
-    )?;
+    )
+    .await?;
 
     if toc_hits == 0 && !sections.is_empty() {
         eprintln!(
@@ -216,20 +197,21 @@ fn convert_epub(epub_path: &Path, out_dir: &Path) -> anyhow::Result<()> {
     }
 
     // Extract images, CSS, and fonts
-    extract_resources(&mut doc, out_dir, &root_base)?;
+    extract_resources(&mut doc, out_dir, &root_base).await?;
 
     let book_name = out_dir.file_name().unwrap().to_string_lossy();
     fs::write(
         out_dir.join("index.json"),
         generate_index(&book_name, &sections),
-    )?;
+    )
+    .await?;
 
     Ok(())
 }
 
 /// Extract non-HTML resources (images, CSS, fonts) from the EPUB into out_dir,
 /// preserving directory structure relative to root_base.
-fn extract_resources(
+async fn extract_resources(
     doc: &mut EpubDoc<std::io::BufReader<std::fs::File>>,
     out_dir: &Path,
     root_base: &Path,
@@ -258,9 +240,9 @@ fn extract_resources(
             .unwrap_or(res_path.as_path());
         let dest = out_dir.join(rel_path);
         if let Some(parent) = dest.parent() {
-            fs::create_dir_all(parent)?;
+            fs::create_dir_all(parent).await?;
         }
-        fs::write(&dest, bytes)?;
+        fs::write(&dest, bytes).await?;
     }
     Ok(())
 }
